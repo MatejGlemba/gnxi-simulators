@@ -509,23 +509,102 @@ func (s *Server) listenForUpdates(c *streamClient) {
 	}
 }
 
+func extractModuleName(elem *gnmi.PathElem) string {
+	// Split the element name by ":"
+	parts := strings.Split(elem.Name, ":")
+	if len(parts) > 1 {
+		return parts[1]
+	}
+	return elem.Name
+}
+
+func parentContainsChild(parent, child *gnmi.Path) bool {
+	// Check if the parent path has fewer elements than the child path
+	if len(parent.Elem) > len(child.Elem) {
+		return false
+	}
+
+	// Iterate over the elements of the parent and child paths
+	for i := range parent.Elem {
+		withoutModuleNameParent := extractModuleName(parent.Elem[i])
+		withoutModuleNameChild := extractModuleName(child.Elem[i])
+
+		if withoutModuleNameParent != withoutModuleNameChild {
+			return false
+		}
+
+		// Check if the keys of the parent element are not a subset of the child element's keys
+		if parent.Elem[i].Key != nil {
+			for key, value := range parent.Elem[i].Key {
+				if child.Elem[i].Key == nil || child.Elem[i].Key[key] != value {
+					return false
+				}
+			}
+		}
+	}
+
+	return true
+}
+
+// / MergePaths merges a child path into a parent path based on the described rules.
+func MergePaths(parentPath, childPath *gnmi.Path) *gnmi.Path {
+	mergedElem := make([]*gnmi.PathElem, len(childPath.Elem))
+
+	for i, childElem := range childPath.Elem {
+		var mergedElemName string
+
+		if i >= len(parentPath.Elem) {
+			mergedElem[i] = childElem
+			continue
+		}
+		// If the names match, use the child's name
+		if i < len(parentPath.Elem) && childElem.Name == parentPath.Elem[i].Name {
+			mergedElemName = childElem.Name
+		} else {
+			mergedElemName = parentPath.Elem[i].Name
+		}
+
+		// Copy the child element
+		mergedElem[i] = &gnmi.PathElem{
+			Name: mergedElemName,
+		}
+
+		// If the child element has keys and the parent does not, use the child's keys
+		if len(childElem.Key) > 0 && (i >= len(parentPath.Elem) || len(parentPath.Elem[i].Key) == 0) {
+			mergedElem[i].Key = make(map[string]string)
+			for key, value := range childElem.Key {
+				mergedElem[i].Key[key] = value
+			}
+		}
+	}
+
+	return &gnmi.Path{
+		Elem: mergedElem,
+	}
+}
+
 // configEventProducer produces update events for stream subscribers.
 func (s *Server) listenToConfigEvents(request *pb.SubscriptionList) {
 	for v := range s.ConfigUpdate.Out() {
 		update := v.(*pb.Update)
 		subscribers := s.getSubscribers()
 		for key, c := range subscribers {
-			if key == update.GetPath().String() {
+			// check if the update path contains subscribe path (it's in the string format -> contains substring)
+			log.Debugf("%v ; %v", update.GetPath().String(), key)
+			if parentContainsChild(key, update.GetPath()) {
 				newUpdateValue, err := s.getUpdate(c, request, update.GetPath())
-
+				newUpdatePath := MergePaths(key, update.GetPath())
+				log.Debugf("updatedPath %v", newUpdatePath.String())
 				if err != nil {
-					deleteResponse := buildDeleteResponse(update.GetPath())
+					log.Errorf("Error creating update message:  %v", err)
+					deleteResponse := buildDeleteResponse(newUpdatePath)
 					s.sendResponse(deleteResponse, c.stream)
 					syncResponse := buildSyncResponse()
 					s.sendResponse(syncResponse, c.stream)
 
 				} else {
 					update.Val = newUpdateValue.Val
+					update.Path = newUpdatePath
 
 					// builds subscription response
 					response, _ := buildSubResponse(update)
@@ -540,19 +619,24 @@ func (s *Server) listenToConfigEvents(request *pb.SubscriptionList) {
 	}
 }
 
-func (s *Server) getSubscribers() map[string]*streamClient {
+func ToGNMIPath(key string) {
+	panic("unimplemented")
+}
+
+func (s *Server) getSubscribers() map[*pb.Path]*streamClient {
 	s.subMu.RLock()
 	defer s.subMu.RUnlock()
-	subscribers := make(map[string]*streamClient)
+	subscribers := make(map[*pb.Path]*streamClient)
 	for key, c := range s.subscribers {
 		subscribers[key] = c
 	}
 	return subscribers
 }
 
-func (s *Server) addSubscriber(key string, c *streamClient) {
+func (s *Server) addSubscriber(path *pb.Path, c *streamClient) {
 	s.subMu.Lock()
-	s.subscribers[key] = c
+	log.Info("Add subscriber : %v", path)
+	s.subscribers[path] = c
 	s.subMu.Unlock()
 }
 
@@ -561,7 +645,7 @@ func buildSubResponse(update *pb.Update) (*pb.SubscribeResponse, error) {
 	updateArray := make([]*pb.Update, 0)
 	updateArray = append(updateArray, update)
 	notification := &pb.Notification{
-		Timestamp: time.Now().Unix(),
+		Timestamp: time.Now().UnixNano(),
 		Update:    updateArray,
 	}
 	responseUpdate := &pb.SubscribeResponse_Update{
@@ -578,7 +662,7 @@ func buildSubResponse(update *pb.Update) (*pb.SubscribeResponse, error) {
 func buildDeleteResponse(delete *pb.Path) *gnmi.SubscribeResponse {
 	deleteArray := []*gnmi.Path{delete}
 	notification := &gnmi.Notification{
-		Timestamp: time.Now().Unix(),
+		Timestamp: time.Now().UnixNano(),
 		Delete:    deleteArray,
 	}
 	responseUpdate := &gnmi.SubscribeResponse_Update{

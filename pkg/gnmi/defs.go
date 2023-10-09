@@ -48,7 +48,7 @@ type Server struct {
 	configMu            sync.RWMutex // mu is the RW lock to protect the access to config
 	subMu               sync.RWMutex
 	readOnlyUpdateValue *pb.Update
-	subscribers         map[string]*streamClient
+	subscribers         map[*pb.Path]*streamClient
 }
 
 var (

@@ -33,5 +33,5 @@ COPY configs/target_configs target_configs
 COPY tools/scripts scripts
 COPY pkg/certs certs
 
-RUN chmod +x ./scripts/run_targets.sh
-CMD ["./scripts/run_targets.sh"]
+RUN chmod +x ./scripts/run_target.sh
+CMD ["./scripts/run_target.sh"]

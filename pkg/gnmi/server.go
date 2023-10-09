@@ -37,7 +37,7 @@ func NewServer(model *Model, config []byte, callback ConfigCallback) (*Server, e
 		},
 	}
 	s.readOnlyUpdateValue = &pb.Update{Path: nil, Val: val}
-	s.subscribers = make(map[string]*streamClient)
+	s.subscribers = make(map[*pb.Path]*streamClient)
 	s.ConfigUpdate = channels.NewRingChannel(100)
 
 	return s, nil

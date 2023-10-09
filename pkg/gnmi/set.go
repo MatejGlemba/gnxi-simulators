@@ -80,15 +80,19 @@ func (s *Server) doDelete(jsonTree map[string]interface{}, prefix, path *pb.Path
 // the device, modifies the json tree of the config struct, then calls the
 // callback function to apply the operation to the device hardware.
 func (s *Server) doReplaceOrUpdate(jsonTree map[string]interface{}, op pb.UpdateResult_Operation, prefix, path *pb.Path, val *pb.TypedValue) (*pb.UpdateResult, error) {
+	log.Debugf("Incoming value : %v", val)
 	// Validate the operation.
 	fullPath := gnmiFullPath(prefix, path)
+	log.Debugf("Gnmi full path : %v", fullPath)
 	emptyNode, stat := ygotutils.NewNode(s.model.structRootType, fullPath)
 	if stat.GetCode() != int32(cpb.Code_OK) {
 		return nil, status.Errorf(codes.NotFound, "path %v is not found in the config structure: %v", fullPath, stat)
 	}
 	var nodeVal interface{}
 	nodeStruct, ok := emptyNode.(ygot.ValidatedGoStruct)
+	log.Debugf("Validated struct :%v :%v", nodeStruct, ok)
 	if ok {
+		log.Debugf("JsonIetfVal :%v :%v", val, val.GetJsonIetfVal())
 		if err := s.model.jsonUnmarshaler(val.GetJsonIetfVal(), nodeStruct); err != nil {
 			return nil, status.Errorf(codes.InvalidArgument, "unmarshaling json data to config struct fails: %v", err)
 		}
@@ -172,12 +176,64 @@ func (s *Server) doReplaceOrUpdate(jsonTree map[string]interface{}, op pb.Update
 	}, nil
 }
 
+func IsNotTypedValueJSONIETF(tv *pb.TypedValue) bool {
+	return (tv.Value.(*pb.TypedValue_JsonIetfVal) == nil)
+}
+
+func unwrapTopNode(typeVal *pb.TypedValue) (*pb.TypedValue, error) {
+	if _, isNotJSONIETF := typeVal.Value.(*pb.TypedValue_JsonIetfVal); !isNotJSONIETF {
+		return typeVal, nil
+	} 
+
+	var result map[string]interface{}
+	err := json.Unmarshal(typeVal.GetJsonIetfVal(), &result)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, v := range result {
+		switch val := v.(type) {
+		case []interface{}:
+			if len(val) > 0 {
+				// If it's a list, return the first entry
+				valJson, err := json.Marshal(val[0])
+				if err != nil {
+					return nil, err
+				}
+
+				return &pb.TypedValue{
+					Value: &pb.TypedValue_JsonIetfVal{
+						JsonIetfVal: valJson,
+					}, 
+				}, nil
+			}
+		case map[string]interface{}:
+			// If it's a container, return the container itself
+			valJson, err := json.Marshal(val)
+			if err != nil {
+				return nil, err
+			}
+
+			return &pb.TypedValue{
+				Value: &pb.TypedValue_JsonIetfVal{
+					JsonIetfVal: valJson,
+				}, 
+			}, nil
+		default:
+			return nil, nil
+		}
+	}
+	return nil, nil
+}
+
 // Set implements the Set RPC in gNMI spec.
 func (s *Server) Set(ctx context.Context, req *pb.SetRequest) (*pb.SetResponse, error) {
 	s.configMu.Lock()
 	defer s.configMu.Unlock()
 
+	log.Debugf("Incoming request : %v", req)
 	jsonTree, err := ygot.ConstructIETFJSON(s.config, &ygot.RFC7951JSONConfig{})
+	log.Debugf("Constructed IETF Json : %v", jsonTree)
 	if err != nil {
 		msg := fmt.Sprintf("error in constructing IETF JSON tree from config struct: %v", err)
 		log.Error(msg)
@@ -202,7 +258,15 @@ func (s *Server) Set(ctx context.Context, req *pb.SetRequest) (*pb.SetResponse, 
 		results = append(results, res)
 	}
 	for _, upd := range req.GetUpdate() {
-		res, grpcStatusError := s.doReplaceOrUpdate(jsonTree, pb.UpdateResult_UPDATE, prefix, upd.GetPath(), upd.GetVal())
+		newVal, err := unwrapTopNode(upd.GetVal())
+		if err != nil {
+			return nil, status.Error(codes.Internal, err.Error())
+		}
+		newUpd := &pb.Update{
+			Path: upd.GetPath(),
+			Val: newVal,
+		}
+		res, grpcStatusError := s.doReplaceOrUpdate(jsonTree, pb.UpdateResult_UPDATE, prefix, newUpd.GetPath(), newUpd.GetVal())
 		if grpcStatusError != nil {
 			return nil, grpcStatusError
 		}

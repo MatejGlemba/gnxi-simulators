@@ -1,0 +1,14 @@
+version: "3"
+services:
+  devicesim:
+    image: gnmi-simulator:latest
+    environment:
+      - HOSTNAME=localhost
+      - GNMI_PORT=10161
+      - GNMI_INSECURE_PORT=11161
+      - DEBUG=true
+    ports:
+      - "10161:10161"
+      - "11161:11161"
+    labels:
+      description: "gNMI Simulator Device"

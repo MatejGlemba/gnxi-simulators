@@ -48,7 +48,7 @@ func buildSubResponse(update *pb.Update) (*pb.SubscribeResponse, error) {
 	updateArray := make([]*pb.Update, 0)
 	updateArray = append(updateArray, update)
 	notification := &pb.Notification{
-		Timestamp: time.Now().Unix(),
+		Timestamp: time.Now().UnixNano(),
 		Update:    updateArray,
 	}
 	responseUpdate := &pb.SubscribeResponse_Update{

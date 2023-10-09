@@ -12,7 +12,6 @@ import (
 	"net"
 	"os"
 	"reflect"
-	"time"
 
 	"github.com/onosproject/onos-lib-go/pkg/logging"
 
@@ -75,14 +74,14 @@ func main() {
 		log.Fatalf("Failed to listen: %v", err)
 	}
 
-	go func() {
+	// go func() {
 
-		for {
-			s.SetDateTime()
-			time.Sleep(time.Second * 1)
-		}
+	// 	for {
+	// 		s.SetDateTime()
+	// 		time.Sleep(time.Second * 1)
+	// 	}
 
-	}()
+	// }()
 
 	log.Infof("Starting gNMI agent to serve on %s", *bindAddr)
 	if err := g.Serve(listen); err != nil {
